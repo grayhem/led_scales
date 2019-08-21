@@ -16,12 +16,37 @@ FASTLED_USING_NAMESPACE
 #define LED_TYPE    WS2812
 #define COLOR_ORDER GRB
 //#define COLOR_ORDER RGB
-#define NUM_LEDS    25
-CRGB leds[NUM_LEDS];
 
-#define BRIGHTNESS          96
-#define FRAMES_PER_SECOND  120
+// three strips
+#define FIRST_COUNT     15
+#define SECOND_COUNT    27
+#define THIRD_COUNT     16
+CRGB leds[FIRST_COUNT+SECOND_COUNT+THIRD_COUNT];
 
+#define NUM_LEDS    FIRST_COUNT + SECOND_COUNT + THIRD_COUNT
+#define FRAMES_PER_SECOND   120
+
+#define BRIGHTNESS          255
+#define LO                  64
+#define MID                 128
+#define HI                  192
+#define SEVERE              255
+
+
+uint8_t pattern_idx = 0;                // Index number of which pattern is current
+uint8_t palette_idx = 0;                // fucking guess
+uint8_t color_index = 0;                // rotating "base color" used by many of the patterns
+uint8_t skip_index = 0;                 // track which LEDs get blacked out
+uint8_t light_skip_every = 5;           // one in every _ LEDS get blacked out
+uint8_t dark_skip_every = 10;           // one in every _ LEDS don't get blacked out
+uint8_t palette_start_index = 0;        // for looping through the color palette specifically
+int compact_width = 15;                 // how wide the window of palette
+uint8_t random_start = 0;               // for the random walkers
+uint8_t random_stop = 10;
+uint8_t state = 0;                          // need some state for fireworks
+uint8_t noise[SECOND_COUNT];
+uint8_t bright_noise[SECOND_COUNT];
+static uint16_t noise_seed;
 
 void setup() {
     delay(3000); // 3 second delay for recovery
@@ -31,6 +56,13 @@ void setup() {
 
     // set master brightness control
     FastLED.setBrightness(BRIGHTNESS);
+
+    FastLED.setCorrection(TypicalLEDStrip);
+    //FastLED.setTemperature(Tungsten40W);
+    //FastLED.setTemperature(HighNoonSun);
+    FastLED.setTemperature(ClearBlueSky);
+    noise_seed = random16();
+
 }
 
 DEFINE_GRADIENT_PALETTE( Sunset_Real_gp ) {
@@ -282,17 +314,7 @@ PaletteList palette_list = {
     bhw3_13_gp,
     bhw3_01_gp};
 
-uint8_t pattern_idx = 0;                // Index number of which pattern is current
-uint8_t palette_idx = 0;                // fucking guess
-uint8_t color_index = 0;                // rotating "base color" used by many of the patterns
-uint8_t skip_index = 0;                 // track which LEDs get blacked out
-uint8_t light_skip_every = 5;           // one in every _ LEDS get blacked out
-uint8_t dark_skip_every = 10;           // one in every _ LEDS don't get blacked out
-uint8_t palette_start_index = 0;        // for looping through the color palette specifically
-int compact_width = 15;                 // how wide the window of palette
-uint8_t random_start = 0;               // for the random walkers
-uint8_t random_stop = 10;
-int state = 0;                          // need some state for fireworks
+
 
 // color palette blending courtesy:
     // https://gist.github.com/kriegsman/1f7ccbbfa492a73c015e
@@ -315,12 +337,28 @@ CRGB black = CRGB(0, 0, 0);
 void loop()
 {
     // blend this palette to the next
-//    nblendPaletteTowardPalette( currentPalette, targetPalette, maxChanges);
+    nblendPaletteTowardPalette( currentPalette, targetPalette, maxChanges);
 
     // Call the current pattern function once, updating the 'leds' array
 //    pattern_list[pattern_idx]();
-    what();
+//    what();
+//    throb_test();
+//    sine_slide_fade();
+    //fade_test();
+    // sweep_flash(true);
+    //seizure_mode_bad();
+    flame_palette();
 
+//    solid color flicker
+//    use correlated random noise
+//    when over threshold, flash.
+//    brightness of flash inversely proportional to threshold value
+//    when to step the palette start index?
+//
+//    flame pattern with different color palettes
+//
+//    set brightness high and then do multiple global variables for different brightness levels.
+//    use a few high ones for glitter. maybe random brightness on glitter.
     //palette_start_index = palette_start_index + 1; /* motion speed */
 
     // send the 'leds' array out to the actual LED strip
@@ -330,7 +368,7 @@ void loop()
 
     // do some periodic updates
     EVERY_N_MILLISECONDS( 20 ) {color_index++;} // slowly cycle the "base color" through the rainbow
-    EVERY_N_SECONDS( 10 ) { next_pattern(); } // change patterns periodically
+    //EVERY_N_SECONDS( 10 ) { next_pattern(); } // change patterns periodically
     EVERY_N_SECONDS(17) {next_palette();}   // just make sure it's not divisible by the other one
 }
 
@@ -389,13 +427,6 @@ void rainbow_skip_dark()
     skip_dark();
 }
 
-void what()
-{
-  for (int i = 0; i < NUM_LEDS; ++i) {
-    leds[i] = CRGB(128, 0, 0);
-  }
-}
-
 void sine_lond()
 {
   // a colored dot sweeping back and forth, with fading trails
@@ -430,6 +461,19 @@ void juggle_skip_light() {
     skip_light();
 }
 
+void fill_range_from_palette(int start_index, int stop_index, uint8_t brightness=MID)
+{
+    // fill a region of the strip from a palette. if palette_start_index increments too fast and/or
+    // the filled region is too large, the region will flicker in an unpleasant way.
+//    uint8_t brightness = MID;
+    for( int i = start_index; i < stop_index; i++) {
+        leds[i] = ColorFromPalette(
+            currentPalette,
+            palette_start_index,
+            brightness);
+        palette_start_index += 1;
+    }
+}
 
 void sine_fade_palette()
 {
@@ -440,17 +484,36 @@ void sine_fade_palette()
     fill_range_from_palette(pos, pos+compact_width);
 }
 
-void fill_range_from_palette(int start_index, int stop_index)
+
+
+void fill_range_transparent(int start_index, int stop_index, uint8_t brightness=MID)
 {
     // fill a region of the strip from a palette. if palette_start_index increments too fast and/or
     // the filled region is too large, the region will flicker in an unpleasant way.
-    uint8_t brightness = 255;
+    // doesn't affect palette start index
+//    uint8_t brightness = 255;
+    uint8_t use_palette_start_index = palette_start_index;
     for( int i = start_index; i < stop_index; i++) {
         leds[i] = ColorFromPalette(
             currentPalette,
-            palette_start_index,
+            use_palette_start_index,
             brightness);
-        palette_start_index += 1;
+        use_palette_start_index += 1;
+    }
+}
+
+
+void fill_range_backwards_transparent(int start_index, int stop_index, uint8_t brightness=MID)
+{
+    // backyerds. we assume start is lower than stop. does not affect palette start index.
+//    uint8_t brightness = 255;
+    uint8_t use_palette_start_index = palette_start_index + (stop_index - start_index);
+    for ( int i = stop_index - 1; i == start_index; i--) {
+        leds[i] = ColorFromPalette(
+            currentPalette,
+            use_palette_start_index,
+            brightness);
+        use_palette_start_index -= 1;
     }
 }
 
@@ -462,11 +525,11 @@ void fill_range_from_palette_adaptive(int start_index, int stop_index)
     // palette_start_index to once every ceil(num_leds_region / `quickness`) pixels.
     // lower values of quickness make colors change more slowly. 10 is good
 
-    int quickness = 10;
+    int quickness = 5;
     int span = stop_index - start_index;
     span = span / quickness + 1;
 
-    uint8_t brightness = 255;
+    uint8_t brightness = MID;
     for( int i = start_index; i < stop_index; i++) {
         leds[i] = ColorFromPalette(
             currentPalette,
@@ -479,15 +542,172 @@ void fill_range_from_palette_adaptive(int start_index, int stop_index)
     }
 }
 
-void fill_range_with_glitter(int start_index, int stop_index, fract8 chance_of_glitter)
+
+void triple_range(fract8 start, fract8 fin)
+{
+    // fill region on all strips designated by proportion 0-1. if they are different lengths, they
+    // will span different color ranges. does not touch palette_start_index.
+    uint8_t start_index, stop_index;
+
+
+    start_index = scale8(FIRST_COUNT, start);
+    stop_index = scale8(FIRST_COUNT, fin);
+    //start_index = 0;
+    //stop_index = FIRST_COUNT;
+    fill_range_transparent(start_index, stop_index);
+
+    start_index = scale8(SECOND_COUNT, start) + FIRST_COUNT;
+    stop_index = scale8(SECOND_COUNT, fin) + FIRST_COUNT;
+    //fill_range_backwards_transparent(start_index, stop_index);
+    fill_range_transparent(start_index, stop_index);
+
+    start_index = scale8(THIRD_COUNT, start) + SECOND_COUNT + FIRST_COUNT;
+    stop_index = scale8(THIRD_COUNT, fin) + SECOND_COUNT + FIRST_COUNT;
+    fill_range_transparent(start_index, stop_index);
+
+}
+
+void sweep_flash(bool sparkle)
+{
+    fadeToBlackBy( leds, NUM_LEDS, 20);
+    fract8 width = 50;
+    uint8_t advance = 1;
+    //fract8 start = fract8(state % 256);
+    //fract8 fin = (start + width) % 256;
+    fract8 start = fract8(state);
+    fract8 fin = start + width;
+    //start = 0;
+    //fin = 255;
+    //triple_range(start, fin);
+    if (fin < start){
+      triple_range(fin, 255);
+      triple_range(0, start);
+      if (sparkle){
+        fill_range_with_glitter(0, NUM_LEDS, 3);
+      }
+    } else {
+      triple_range(start, fin);
+    }
+    //triple_range(64, 200);
+    palette_start_index += 1;
+    state += advance;
+}
+
+void seizure_mode_bad()
+{
+  // random walk for chance of lighting up everything one color
+  fadeToBlackBy( leds, NUM_LEDS, 20);
+  uint8_t scalar=10;
+  uint8_t brightness=MID;
+  uint8_t threshold=128;
+  state += random8(scalar) - scalar / 2;
+  if (state > threshold) {
+    for (uint8_t i=0; i < NUM_LEDS; ++i) {
+      leds[i] = ColorFromPalette(
+            currentPalette,
+            palette_start_index,
+            brightness);
+    }
+    palette_start_index += 1;
+
+  }
+  //palette_start_index += 1;
+}
+
+void flame_palette()
+{
+  // could put this on a beatsin8 or whatever
+  fadeToBlackBy( leds, NUM_LEDS, 10);
+  fillnoise8(10);
+  for (uint8_t i=0; i < SECOND_COUNT; ++i){
+    leds[i] = ColorFromPalette(
+      currentPalette,
+      noise[i],
+      bright_noise[i]);
+  }
+  for (uint8_t i=0; i < SECOND_COUNT; ++i){
+    leds[FIRST_COUNT + i] = ColorFromPalette(
+      currentPalette,
+      noise[i],
+      bright_noise[i]);
+  }
+  for (uint8_t i=0; i < THIRD_COUNT; ++i){
+    leds[FIRST_COUNT + SECOND_COUNT + i] = ColorFromPalette(
+      currentPalette,
+      noise[i],
+      bright_noise[i]);
+  }
+  //palette_start_index += 1;
+}
+
+void fillnoise8(int scale)
+{
+  for (int i=0; i < SECOND_COUNT; ++i) {
+    noise[i] = inoise8(noise_seed + i*scale) + palette_start_index;
+    bright_noise[i] = scale8(HI, inoise8(noise_seed + i*scale*3));
+  }
+  noise_seed += scale;
+  palette_start_index += 1;
+}
+
+void fill_range_with_glitter(int start_index, int stop_index, uint8_t chance_of_glitter)
 {
     // does what it says on the tin.
     // if you're gonna call this many times then set chance_of_glitter low.
     for( int i = start_index; i < stop_index; i++) {
         if( random8() < chance_of_glitter) {
-            leds[i] += CRGB::White;
+            leds[i] = CRGB::White;
           }
     }
+}
+
+void slide_fade(uint8_t start_index, uint8_t stop_index, uint8_t brightness=MID)
+{
+    // palette moves through a fixed window
+    palette_start_index += 1;
+    uint8_t fade_index = palette_start_index;
+//    uint8_t brightness = 255;
+    for (uint8_t i=start_index; i<stop_index; ++i){
+      leds[i] = ColorFromPalette(
+            currentPalette,
+            fade_index,
+            brightness);
+      fade_index += 1;
+    }
+}
+
+void fade_test()
+{
+    slide_fade(0, NUM_LEDS);
+}
+
+//void sine_slide_fade()
+//{
+//    // slide forwards/ backwards at sine rate
+//
+//    int8_t slide_range = 6;
+//    accum88 bpm = 6;
+//    int8_t slide_step = slide_range - beatsin8(bpm, 0, slide_range * 2);
+//    slide_fade(0, NUM_LEDS, slide_step);
+//}
+
+void throb_test()
+{
+    // static palette with sparkle throb over it
+    // fill_range_from_palette_adaptive(0, NUM_LEDS);
+//    fill_range_from_palette(0, NUM_LEDS);
+    slide_fade(0, NUM_LEDS);
+    sparkle_throb(6, 64);
+}
+
+
+void sparkle_throb(accum88 bpm, uint8_t top_chance)
+{
+    // slowly (???) ramp glitter chance up and down over the whole strip
+
+    uint8_t chance = beatsin8(bpm, 0, top_chance);
+    fill_range_with_glitter(0, NUM_LEDS, chance);
+
 }
 
 void fireworks()
@@ -508,7 +728,7 @@ void fireworks()
     int fade_duration = 20;
 
     // keep this low or it'll be real shiny
-    fract8 chance_of_glitter = 5;
+    uint8_t chance_of_glitter = 5;
 
     // how wide a region we draw at the outer limits of the blast
     uint8_t blast_width = 10;
